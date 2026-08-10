@@ -1,0 +1,31 @@
+# Production-lite overlay: run alongside the base file to swap the backend
+# from single-process/--reload (dev convenience) to multiple worker
+# processes, with no source bind-mount (the image is what actually ships).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+#
+# WebSocket broadcasts (violations/progress -> the teacher monitor) go
+# through Redis pub/sub (app/routers/ws.py), so they correctly reach a
+# connection held by any worker/replica, not just the one that handled the
+# originating request. Each worker's `redis_subscriber_loop` (started in
+# main.py's lifespan) still needs to actually be running for that to work -
+# it always is when the app boots normally.
+#
+# UVICORN_WORKERS x (pool_size=15 + max_overflow=10) must stay comfortably
+# under Postgres's max_connections (100 by default here) - the default of 3
+# workers below uses 45, leaving headroom for migrations/psql/admin tools.
+# Raise Postgres's max_connections (add a `command:` override on the `db`
+# service) before increasing UVICORN_WORKERS past ~5.
+services:
+  backend:
+    restart: always
+    # `volumes` merges (appends) across -f files by default - `!reset` forces
+    # a full clear instead, so the dev bind-mount of ./backend doesn't leak
+    # into this "run what's actually in the built image" config.
+    volumes: !reset []
+    # Migrations run once here (not per-worker - --workers forks *after* this
+    # shell command completes) before the multi-worker server starts.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-3}"
+
+  frontend:
+    restart: always
