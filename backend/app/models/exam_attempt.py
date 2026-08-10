@@ -59,4 +59,4 @@ class ExamAttempt(Base):
     # it's this ORM-level cascade that cleans up the child rows. Forgetting
     # it here would make resetting an attempt that has any log entries fail
     # with a foreign key violation.
-    answer_change_logs = relationship("AnswerChangeLog", cascade="all, delete-orphan")
+    answer_change_logs = relationship("AnswerChangeLog", back_populates="attempt", cascade="all, delete-orphan")

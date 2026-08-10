@@ -52,6 +52,33 @@ services:
     # already current, so this is safe to leave in for dev convenience.
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
+  # Consumes the submit queue (see backend/app/services/submit_queue.py,
+  # backend/app/worker.py) - grades exam attempts off the request/response
+  # path, so a burst of students hitting "nộp bài" at the same moment queues
+  # up instead of piling directly onto Postgres inside the API's own request
+  # handling. Scales independently of `backend`:
+  #   docker compose up -d --scale worker=3
+  # runs 3 of these against the same Redis consumer group; each queued
+  # submission goes to exactly one of them.
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://exam_user:exam_password@db:5432/exam_system}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-change-me}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+    volumes:
+      - ./backend:/app
+    command: python -m app.worker
+
   frontend:
     build: ./frontend
     restart: unless-stopped

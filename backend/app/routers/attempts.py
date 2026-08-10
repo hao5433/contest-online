@@ -28,8 +28,9 @@ from app.schemas.attempt import (
     StartAttemptResponse,
     ViolationRequest,
 )
-from app.services.grading import compute_end_at, ensure_not_expired, record_violation, submit_attempt
+from app.services.grading import compute_end_at, ensure_not_expired, mark_submitted, record_violation
 from app.services.shuffling import seeded_shuffle
+from app.services.submit_queue import enqueue_submission
 
 router = APIRouter(prefix="/api", tags=["attempts"])
 
@@ -261,11 +262,18 @@ async def submit_attempt_endpoint(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Deliberately does NOT grade inline - see mark_submitted's docstring.
+    Marks the attempt `submitted` (one cheap UPDATE) and enqueues it for a
+    worker process to actually grade, then returns immediately. The
+    response's `status` will be "submitted" (score still null) unless the
+    worker happens to have already finished by the time this returns -
+    frontend polls GET /attempts/{id}/result until it flips to "graded"."""
     attempt = await _get_attempt_or_404(db, attempt_id)
     if attempt.student_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your attempt")
     if attempt.status == AttemptStatus.in_progress:
-        await submit_attempt(db, attempt)
+        await mark_submitted(db, attempt)
+        await enqueue_submission(attempt_id)
     exam = await attempt.awaitable_attrs.exam
     reveal_details = not _exam_still_open(exam)
     return await _build_result(db, attempt, reveal_details=reveal_details)
@@ -298,6 +306,13 @@ async def get_result(
 
 
 async def _build_result(db: AsyncSession, attempt: ExamAttempt, reveal_details: bool) -> ResultResponse:
+    # Even when the caller wants details revealed (exam closed / staff
+    # viewing), there's nothing correct to show until grading has actually
+    # run - `answer.is_correct` is still None on every answer while status
+    # is `submitted` (queued, not yet picked up by a worker - see
+    # mark_submitted/app/worker.py). Showing "sai" for everything during
+    # that brief window would be actively wrong, not just incomplete.
+    reveal_details = reveal_details and attempt.status == AttemptStatus.graded
     questions_out = []
     if reveal_details:
         answers = await attempt.awaitable_attrs.answers

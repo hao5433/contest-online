@@ -16,6 +16,11 @@
 # workers below uses 45, leaving headroom for migrations/psql/admin tools.
 # Raise Postgres's max_connections (add a `command:` override on the `db`
 # service) before increasing UVICORN_WORKERS past ~5.
+#
+# The `worker` service (consumes the submit queue - see
+# backend/app/worker.py) scales independently of both of the above, via
+# Compose replicas rather than UVICORN_WORKERS-style in-process workers:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker=3
 services:
   backend:
     restart: always
@@ -26,6 +31,10 @@ services:
     # Migrations run once here (not per-worker - --workers forks *after* this
     # shell command completes) before the multi-worker server starts.
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-3}"
+
+  worker:
+    restart: always
+    volumes: !reset []
 
   frontend:
     restart: always

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import DEFAULT_DEV_JWT_SECRET, settings
 from app.routers import attempts, auth, classrooms, exams, questions, subjects, users, ws
+from app.services.submit_queue import ensure_consumer_group
 
 logger = logging.getLogger("app.startup")
 
@@ -32,6 +33,11 @@ async def lifespan(app: FastAPI):
     # app/routers/ws.py for why this is what makes WebSocket broadcasts reach
     # connections held by *other* worker processes.
     subscriber_task = asyncio.create_task(ws.redis_subscriber_loop())
+    # Idempotent - safe even if the `worker` service (app/worker.py) already
+    # created this consumer group, or hasn't started yet. Doing it here too
+    # means a submit can be queued (and nothing missed) even before any
+    # worker process is up.
+    await ensure_consumer_group()
     yield
     subscriber_task.cancel()
     try:

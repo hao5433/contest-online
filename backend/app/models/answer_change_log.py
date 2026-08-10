@@ -25,4 +25,4 @@ class AnswerChangeLog(Base):
     selected_choice_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    attempt = relationship("ExamAttempt")
+    attempt = relationship("ExamAttempt", back_populates="answer_change_logs")

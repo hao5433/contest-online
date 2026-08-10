@@ -28,6 +28,27 @@ def _is_answer_correct(choices: list, selected_choice_ids: list[int]) -> bool:
     return set(selected_choice_ids) == correct_ids
 
 
+async def mark_submitted(db: AsyncSession, attempt: ExamAttempt) -> None:
+    """Phase 1 of a 2-phase submit: flips status to `submitted` and stamps
+    `submitted_at` - a single, cheap UPDATE, no grading work at all. The
+    REST endpoint (routers/attempts.py:submit_attempt_endpoint) does this
+    and returns immediately; the actual grading (submit_attempt, below)
+    runs asynchronously in app/worker.py, picked up off a Redis Streams
+    queue. This is what decouples "student clicked nộp bài" from "the
+    attempt is actually graded" - the request never blocks on grading, so
+    a burst of simultaneous submits (e.g. everyone hitting the deadline at
+    once) queues up instead of piling directly onto the database inside
+    hundreds/thousands of concurrent request-response cycles.
+
+    A no-op if the attempt isn't in_progress - calling /submit again on an
+    already-submitted/graded attempt shouldn't re-enqueue it."""
+    if attempt.status != AttemptStatus.in_progress:
+        return
+    attempt.status = AttemptStatus.submitted
+    attempt.submitted_at = datetime.utcnow()
+    await db.commit()
+
+
 async def submit_attempt(db: AsyncSession, attempt: ExamAttempt) -> ExamAttempt:
     """Grades every answer, computes the percentage score, and marks the
     attempt as graded. Idempotent - calling it again on an already-graded
